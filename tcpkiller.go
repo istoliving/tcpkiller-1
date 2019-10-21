@@ -17,9 +17,6 @@ type TCPKiller struct {
 	tokill sync.Map
 }
 
-type EndPoint struct {
-}
-
 // NewTCPKiller ...
 func NewTCPKiller() *TCPKiller {
 	return &TCPKiller{}
@@ -39,7 +36,7 @@ func (k *TCPKiller) StartSniff(device string, snaplen int32, promisc bool, timeo
 
 // Kill ...
 // Note: add is the address of the remote machine.
-func (k *TCPKiller) Kill(addr net.TCPAddr) {
+func (k *TCPKiller) Kill(addr net.Addr) {
 	ch := make(chan int)
 	k.tokill.Store(addr.String(), ch)
 	<-ch
