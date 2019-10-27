@@ -23,8 +23,12 @@ func NewTCPKiller() *TCPKiller {
 }
 
 // StartSniff ...
-func (k *TCPKiller) StartSniff(device string, snaplen int32, promisc bool, timeout time.Duration) error {
+func (k *TCPKiller) StartSniff(device string, snaplen int32, promisc bool, timeout time.Duration, bpf string) error {
 	handle, err := pcap.OpenLive(device, snaplen, promisc, timeout)
+	if err != nil {
+		return err
+	}
+	err = handle.SetBPFFilter(bpf)
 	if err != nil {
 		return err
 	}
@@ -37,12 +41,16 @@ func (k *TCPKiller) StartSniff(device string, snaplen int32, promisc bool, timeo
 // Kill ...
 // Note: add is the address of the remote machine.
 func (k *TCPKiller) Kill(addr net.Addr) {
+	if _, ok := k.tokill.Load(addr.String()); ok {
+		return
+	}
 	ch := make(chan int)
 	k.tokill.Store(addr.String(), ch)
 	<-ch
+	return
 }
 
-func (k *TCPKiller) kill(srcmac, dstmac net.HardwareAddr, srcip, dstip net.IP, srcport, dstport layers.TCPPort, seq uint32, ack uint32, ch chan int) {
+func (k *TCPKiller) kill(srcmac, dstmac net.HardwareAddr, srcip, dstip net.IP, srcport, dstport layers.TCPPort, seq uint32, ack uint32) {
 	tcp := &layers.TCP{
 		Seq:     seq,
 		Ack:     ack,
@@ -66,7 +74,6 @@ func (k *TCPKiller) kill(srcmac, dstmac net.HardwareAddr, srcip, dstip net.IP, s
 		DstMAC:       dstmac,
 		EthernetType: 0x800}
 	k.send_tcp([]byte{}, tcp, ip, mac)
-	ch <- 1
 }
 
 func (k *TCPKiller) sniff() {
@@ -90,16 +97,24 @@ func (k *TCPKiller) sniff() {
 			dstip := ip.DstIP
 			srcport := tcp.SrcPort
 			dstport := tcp.DstPort
+			//fmt.Printf("packet: %v->%v\n", src.String(), dst.String())
 			if chv, ok := k.tokill.Load(src.String()); ok {
 				// dst is our machine.
 				ch := chv.(chan int)
-				go k.kill(dstmac, srcmac, dstip, srcip, dstport, srcport, tcp.Ack+uint32(1), tcp.Seq+uint32(len(tcp.Payload)), ch)
+				for i := 0; i < 3; i++ {
+					k.kill(dstmac, srcmac, dstip, srcip, dstport, srcport, tcp.Ack+uint32(1), tcp.Seq+uint32(len(tcp.Payload)))
+				}
+				k.tokill.Delete(src.String())
+				ch <- 1
 			}
 			if chv, ok := k.tokill.Load(dst.String()); ok {
 				// src is our machine
 				ch := chv.(chan int)
-				go k.kill(srcmac, dstmac, srcip, dstip, srcport, dstport, tcp.Seq+uint32(len(tcp.Payload))+uint32(1), tcp.Ack, ch)
-				go k.kill(srcmac, dstmac, srcip, dstip, srcport, dstport, tcp.Seq+uint32(1), tcp.Ack, ch)
+				for i := 0; i < 3; i++ {
+					k.kill(srcmac, dstmac, srcip, dstip, srcport, dstport, tcp.Seq+uint32(len(tcp.Payload))+uint32(1), tcp.Ack)
+				}
+				k.tokill.Delete(dst.String())
+				ch <- 1
 			}
 		}
 	}
